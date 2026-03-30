@@ -4,10 +4,7 @@
 
 ## 表示例
 
-```
-Opus 4.6 1M │ ctx ████▂    52% │ 5h ⣶        8% │ 7d ⣀        3%
-my-project/src [main] (abc1234)
-```
+![screenshot](images/screenshot.png)
 
 **上段** — モデル名、コンテキストウィンドウサイズ、使用率バー:
 - コンテキストウィンドウ: ブロック文字 `▁▂▃▄▅▆▇█`
