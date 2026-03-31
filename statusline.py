@@ -14,7 +14,12 @@ if '--version' in sys.argv:
     sys.exit(0)
 
 if sys.platform == 'win32':
-    sys.stdout.reconfigure(encoding='utf-8')
+    for _stream in (sys.stdout, sys.stdin):
+        try:
+            if hasattr(_stream, 'reconfigure'):
+                _stream.reconfigure(encoding='utf-8')
+        except Exception:
+            pass
 
 data = json.load(sys.stdin)
 
@@ -173,7 +178,7 @@ if current_dir:
         repo_name = os.path.basename(toplevel)
         rel_path  = os.path.relpath(current_dir, toplevel)
 
-        path_part = repo_name if rel_path == '.' else f'{repo_name}/{rel_path}'
+        path_part = repo_name if rel_path == '.' else repo_name + '/' + rel_path.replace(os.sep, '/')
         if branch and commit_hash:
             git_info = f'[{branch}] ({commit_hash})'
         elif commit_hash:
