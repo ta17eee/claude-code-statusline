@@ -64,7 +64,7 @@ def braille_bar(pct: float, width: int = 8) -> str:
     return _bar(BRAILLE, pct, width)
 
 
-def fmt_metric(label: str, pct: float, bar_fn, color_pct: float | None = None) -> str:
+def fmt_metric(label, pct, bar_fn, color_pct=None):
     p = round(pct)
     cpct = pct if color_pct is None else color_pct
     return f'{DIM}{label}{R} {gradient(cpct)}{bar_fn(pct)}{R} {p}%'
@@ -75,7 +75,7 @@ WINDOW_SECONDS = {'five_hour': 5 * 3600, 'seven_day': 7 * 86400}
 PACE_THRESHOLD = 0.10
 
 
-def fmt_rate_limit(label: str, limit_data: dict, window_key: str) -> str | None:
+def fmt_rate_limit(label, limit_data, window_key):
     used_pct = limit_data.get('used_percentage')
     if used_pct is None:
         return None
