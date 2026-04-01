@@ -6,6 +6,10 @@
 
 ![screenshot](images/screenshot.png)
 
+レートリミット接近時 (リセット時刻を表示):
+
+![screenshot-ratelimit](images/screenshot-ratelimit.png)
+
 **上段** — モデル名、コンテキストウィンドウサイズ、使用率バー:
 - コンテキストウィンドウ: ブロック文字 `▁▂▃▄▅▆▇█`
 - レートリミット (5h / 7d): ブレイユ文字 `⡀⣀⣄⣤⣦⣶⣷⣿`
