@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Claude Code status line: two-line display with block/braille progress bars."""
-__version__ = '1.1.0'
+__version__ = '1.1.1'
 
 import json
 import os
@@ -96,7 +96,11 @@ def fmt_rate_limit(label, limit_data, window_key):
     elapsed_ratio = elapsed / window if window > 0 else 0
 
     if elapsed_ratio < PACE_THRESHOLD or elapsed <= 0:
-        return fmt_metric(label, used_pct, braille_bar)
+        result = fmt_metric(label, used_pct, braille_bar)
+        if window_key == 'five_hour':
+            reset_local = time.localtime(resets_at)
+            result += f' {DIM}@{time.strftime("%H:%M", reset_local)}{R}'
+        return result
 
     projected = used_pct * window / elapsed
     progress = (elapsed_ratio - PACE_THRESHOLD) / (1 - PACE_THRESHOLD)

@@ -6,7 +6,7 @@
 
 ![screenshot](images/screenshot.png)
 
-レートリミット接近時 (リセット時刻を表示):
+レートリミット接近時:
 
 ![screenshot-ratelimit](images/screenshot-ratelimit.png)
 
