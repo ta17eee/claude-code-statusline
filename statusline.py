@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Claude Code status line: two-line display with block/braille progress bars."""
-__version__ = '1.1.1'
+__version__ = '1.1.2'
 
 import json
 import os
@@ -26,6 +26,7 @@ data = json.load(sys.stdin)
 # ── ANSI helpers ──────────────────────────────────────────────────────────────
 R   = '\033[0m'
 DIM = '\033[2m'
+_MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
 
 
 def gradient(pct: float) -> str:
@@ -120,7 +121,7 @@ def fmt_rate_limit(label, limit_data, window_key):
         remaining = resets_at - now
         reset_local = time.localtime(resets_at)
         if remaining >= 86400:
-            reset_str = time.strftime('%b', reset_local) + str(reset_local.tm_mday)
+            reset_str = _MONTHS[reset_local.tm_mon - 1] + str(reset_local.tm_mday)
         else:
             reset_str = time.strftime('%H:%M', reset_local)
         result += f' {DIM}@{reset_str}{R}'
@@ -226,6 +227,7 @@ def _git(*args, cwd: str):
             ['git', '--no-optional-locks', '-C', cwd, *args],
             stderr=subprocess.DEVNULL,
             text=True,
+            timeout=0.08,
         ).strip()
     except Exception:
         return ''
