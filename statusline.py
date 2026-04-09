@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Claude Code status line: two-line display with block/braille progress bars."""
-__version__ = '1.0.0'
+__version__ = '1.1.0'
 
 import json
 import os
@@ -101,21 +101,74 @@ def fmt_rate_limit(label, limit_data, window_key):
     projected = used_pct * window / elapsed
     progress = (elapsed_ratio - PACE_THRESHOLD) / (1 - PACE_THRESHOLD)
 
-    if projected <= 100:
-        color_pct = projected / 2
+    if projected <= 80:
+        color_pct = 0
+    elif projected <= 95:
+        color_pct = (projected - 80) / 15 * 40
     else:
-        max_excess = 100 - progress * 90  # 100 (early) → 10 (late)
-        excess = projected - 100
-        color_pct = 50 + min(excess / max_excess, 1) * 50
+        red_at = 100 + 50 * (1 - progress)  # 150 (early) → 100 (late)
+        color_pct = 40 + min((projected - 95) / (red_at - 95), 1) * 60
 
     result = fmt_metric(label, used_pct, braille_bar, color_pct=color_pct)
 
-    if projected >= 90:
+    show_reset = (window_key == 'five_hour') or (projected >= 90)
+    if show_reset:
+        remaining = resets_at - now
         reset_local = time.localtime(resets_at)
-        reset_str = time.strftime('%H:%M', reset_local)
+        if remaining >= 86400:
+            reset_str = time.strftime('%b', reset_local) + str(reset_local.tm_mday)
+        else:
+            reset_str = time.strftime('%H:%M', reset_local)
         result += f' {DIM}@{reset_str}{R}'
 
     return result
+
+
+# ── Rate limit cache (cross-session) ────────────────────────────────────────
+CACHE_PATH = os.path.join(os.path.expanduser('~'), '.claude', 'statusline-cache.json')
+
+
+def _read_cache():
+    try:
+        with open(CACHE_PATH) as f:
+            c = json.load(f)
+        if time.time() - c.get('ts', 0) > 7 * 86400:
+            return {}
+        return c
+    except Exception:
+        return {}
+
+
+def _write_cache(limits):
+    tmp = CACHE_PATH + '.tmp'
+    try:
+        with open(tmp, 'w') as f:
+            json.dump({**limits, 'ts': time.time()}, f)
+        os.replace(tmp, CACHE_PATH)
+    except Exception:
+        pass
+
+
+def _expire(entry):
+    """Return entry as-is, or reset to 0% if its window has already elapsed."""
+    if entry and entry.get('resets_at') and entry['resets_at'] < time.time():
+        return {'used_percentage': 0}
+    return entry
+
+
+def _pick_fresher(a, b):
+    """Pick the fresher rate-limit entry for one window."""
+    a, b = _expire(a) or {}, _expire(b) or {}
+    ar, br = a.get('resets_at'), b.get('resets_at')
+    if ar is None and br is None:
+        return a if a.get('used_percentage') is not None else b
+    if ar is None:
+        return b
+    if br is None:
+        return a
+    if ar != br:
+        return a if ar > br else b
+    return a if (a.get('used_percentage') or 0) >= (b.get('used_percentage') or 0) else b
 
 
 # ── Line 1: model │ ctx │ 5h │ 7d ─────────────────────────────────────────────
@@ -139,6 +192,12 @@ if ctx is not None:
     parts.append(fmt_metric('ctx', ctx, block_bar))
 
 rate_limits = data.get('rate_limits') or {}
+_cached = _read_cache()
+rate_limits = {
+    k: _pick_fresher(rate_limits.get(k, {}), _cached.get(k, {}))
+    for k in ('five_hour', 'seven_day')
+}
+_write_cache(rate_limits)
 
 five = fmt_rate_limit('5h', rate_limits.get('five_hour', {}), 'five_hour')
 if five is not None:
