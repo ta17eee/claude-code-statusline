@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Claude Code status line: two-line display with block/braille progress bars."""
-__version__ = '1.1.2'
+__version__ = '1.2.0'
 
 import json
 import os
@@ -22,6 +22,29 @@ if sys.platform == 'win32':
             pass
 
 data = json.load(sys.stdin)
+
+# ── Async git: start subprocesses ASAP so they overlap with line-1 work ──────
+GIT_TIMEOUT = 0.5
+current_dir = data.get('workspace', {}).get('current_dir') or data.get('cwd', '')
+_git_procs = None
+if current_dir:
+    try:
+        _git_procs = [
+            subprocess.Popen(
+                ['git', '--no-optional-locks', '-C', current_dir, *cmd],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+            for cmd in (
+                ('rev-parse', '--show-toplevel'),
+                ('rev-parse', '--short', 'HEAD'),
+                ('branch', '--show-current'),
+            )
+        ]
+    except Exception:
+        _git_procs = None
+_git_deadline = time.time() + GIT_TIMEOUT
 
 # ── ANSI helpers ──────────────────────────────────────────────────────────────
 R   = '\033[0m'
@@ -78,7 +101,10 @@ def fmt_metric(label, pct, bar_fn, color_pct=None):
 
 # ── Rate limit pace projection ───────────────────────────────────────────────
 WINDOW_SECONDS = {'five_hour': 5 * 3600, 'seven_day': 7 * 86400}
-PACE_THRESHOLD = 0.10
+# Bootstrap fraction per window: longer windows (7d) need a longer bootstrap
+# because human work patterns (sleep, weekends) make early pace projection
+# systematically over-estimate compared to 5h, where usage is roughly continuous.
+PACE_THRESHOLDS = {'five_hour': 0.10, 'seven_day': 0.30}
 
 
 def fmt_rate_limit(label, limit_data, window_key):
@@ -96,15 +122,12 @@ def fmt_rate_limit(label, limit_data, window_key):
     elapsed = now - (resets_at - window)
     elapsed_ratio = elapsed / window if window > 0 else 0
 
-    if elapsed_ratio < PACE_THRESHOLD or elapsed <= 0:
-        result = fmt_metric(label, used_pct, braille_bar)
-        if window_key == 'five_hour':
-            reset_local = time.localtime(resets_at)
-            result += f' {DIM}@{time.strftime("%H:%M", reset_local)}{R}'
-        return result
-
-    projected = used_pct * window / elapsed
-    progress = (elapsed_ratio - PACE_THRESHOLD) / (1 - PACE_THRESHOLD)
+    # Floor effective elapsed at the bootstrap fraction so the projection stays
+    # bounded in early window without a color discontinuity at the boundary
+    threshold = PACE_THRESHOLDS[window_key]
+    effective_elapsed = max(elapsed, window * threshold)
+    projected = used_pct * window / effective_elapsed
+    progress = max(0.0, (elapsed_ratio - threshold) / (1 - threshold))
 
     if projected <= 80:
         color_pct = 0
@@ -215,31 +238,33 @@ if week is not None:
 line1 = f' {DIM}│{R} '.join(parts)
 
 # ── Line 2: directory + git info ──────────────────────────────────────────────
-current_dir = data.get('workspace', {}).get('current_dir') or data.get('cwd', '')
-
 CYAN = '\033[38;2;100;180;255m'
 
 
-def _git(*args, cwd: str):
-    """Run a git command; return stdout stripped, or '' on error."""
-    try:
-        return subprocess.check_output(
-            ['git', '--no-optional-locks', '-C', cwd, *args],
-            stderr=subprocess.DEVNULL,
-            text=True,
-            timeout=0.08,
-        ).strip()
-    except Exception:
-        return ''
+def _git_collect(procs, deadline):
+    """Wait for the git subprocesses started at the top; return stripped stdouts ('' on failure)."""
+    if procs is None:
+        return ['', '', '']
+    results = []
+    for p in procs:
+        if p.poll() is None:
+            remaining = max(0.0, deadline - time.time())
+            try:
+                p.wait(timeout=remaining)
+            except subprocess.TimeoutExpired:
+                p.kill()
+        try:
+            out, _ = p.communicate(timeout=0.05)
+            results.append(out.strip() if p.returncode == 0 else '')
+        except Exception:
+            results.append('')
+    return results
 
 
 line2 = ''
 if current_dir:
-    toplevel = _git('rev-parse', '--show-toplevel', cwd=current_dir)
+    toplevel, commit_hash, branch = _git_collect(_git_procs, _git_deadline)
     if toplevel:
-        commit_hash = _git('rev-parse', '--short', 'HEAD', cwd=current_dir)
-        branch      = _git('branch', '--show-current', cwd=current_dir)
-
         repo_name = os.path.basename(toplevel)
         rel_path  = os.path.relpath(current_dir, toplevel)
 
