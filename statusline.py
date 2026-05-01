@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Claude Code status line: two-line display with block/braille progress bars."""
-__version__ = '1.2.0'
+__version__ = '1.2.1'
 
 import json
 import os
@@ -253,6 +253,10 @@ def _git_collect(procs, deadline):
                 p.wait(timeout=remaining)
             except subprocess.TimeoutExpired:
                 p.kill()
+                try:
+                    p.wait(timeout=0.05)
+                except Exception:
+                    pass
         try:
             out, _ = p.communicate(timeout=0.05)
             results.append(out.strip() if p.returncode == 0 else '')
