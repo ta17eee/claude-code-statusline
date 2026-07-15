@@ -65,7 +65,20 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      # action-gh-release's `prerelease` input has no auto-detect mode (bool only),
+      # so mark it ourselves from the semver pre-release identifier in the tag
+      # (e.g. v2.0.0-rc1 → prerelease, v2.0.0 → not).
+      - name: Determine prerelease
+        id: prerelease
+        run: |
+          if [[ "${{ github.ref_name }}" == *-* ]]; then
+            echo "value=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: softprops/action-gh-release@v2
         with:
           files: artifacts/*
           fail_on_unmatched_files: true
+          prerelease: ${{ steps.prerelease.outputs.value }}
