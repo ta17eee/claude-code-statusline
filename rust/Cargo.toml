@@ -1,0 +1,14 @@
+[package]
+name = "statusline"
+version = "2.0.0-rc1"
+edition = "2024"
+
+[dependencies]
+chrono = "0.4.45"
+dirs = "6.0.0"
+gix = { version = "0.85.0", default-features = false, features = ["sha1"] }
+serde_json = "1.0.150"
+
+[profile.release]
+strip = true
+lto = true

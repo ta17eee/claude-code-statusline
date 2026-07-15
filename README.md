@@ -24,11 +24,34 @@
 
 ## インストール
 
-```bash
-# 1. スクリプトをダウンロード
-curl -Lo ~/.claude/statusline.py https://github.com/ta17eee/claude-code-statusline/releases/latest/download/statusline.py
+macOS / Linux:
 
-# 2. Claude Code の設定ファイル (~/.claude/settings.json) に以下を追加
+```bash
+curl -fsSL https://github.com/ta17eee/claude-code-statusline/releases/latest/download/install.sh | sh
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://github.com/ta17eee/claude-code-statusline/releases/latest/download/install.ps1 | iex
+```
+
+インストール後、表示されるパスを Claude Code の設定ファイル (`~/.claude/settings.json`) に追加してください:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "/path/to/.claude/statusline"
+  }
+}
+```
+
+<details>
+<summary>旧 Python 版 (v1.2.1 以前) を使い続ける場合</summary>
+
+```bash
+curl -Lo ~/.claude/statusline.py https://github.com/ta17eee/claude-code-statusline/releases/download/v1.2.1/statusline.py
 ```
 
 ```json
@@ -40,15 +63,16 @@ curl -Lo ~/.claude/statusline.py https://github.com/ta17eee/claude-code-statusli
 }
 ```
 
+Python 版は機能追加を終了し、Rust 版に一本化されます。
+</details>
+
 ## 必要環境
 
 - **Claude Code**
-- **Python 3.7+** — 標準ライブラリのみ使用 (`pip install` 不要)
-  - macOS: Xcode Command Line Tools でプリインストール済み
-  - Linux: ほとんどのディストリビューションでプリインストール済み
-  - Windows: [手動インストール](https://www.python.org/downloads/)が必要
 - **Git** (任意) — 下段のブランチ/コミット表示に使用。未インストールの場合はディレクトリパスのみ表示
 - **ターミナル** — 24-bit カラーと Unicode 対応が必要 (Ghostty, iTerm2, Alacritty, Kitty, Windows Terminal, cmux 等)
+
+Python や追加ランタイムのインストールは不要です (単一のネイティブバイナリ)。対応プラットフォーム: macOS (Apple Silicon / Intel)、Linux (x86_64)、Windows (x86_64)。
 
 ## 特徴
 
@@ -60,24 +84,23 @@ curl -Lo ~/.claude/statusline.py https://github.com/ta17eee/claude-code-statusli
 - **コンパクトなモデル情報** — display name から冗長な表記を除去
 - **effort レベル表示** — reasoning effort (`low`〜`max`) をモデル名の隣に表示。セッション中の `/effort` 変更も反映。非対応モデルでは非表示
 - **Git worktree 対応** — worktree 間の移動でも正しいパスを表示
-- **軽量** — git 呼び出しは3回 (`rev-parse` ×2 + `branch`) のみ
+- **ネイティブバイナリ** — Rust + gitoxide (`gix`) 実装。git 情報の取得にサブプロセスを起動せず、実行1回あたりのコストは1桁ミリ秒台
 
 ## 更新
 
 同じコマンドを再実行してください:
 
 ```bash
-curl -Lo ~/.claude/statusline.py https://github.com/ta17eee/claude-code-statusline/releases/latest/download/statusline.py
+curl -fsSL https://github.com/ta17eee/claude-code-statusline/releases/latest/download/install.sh | sh
 ```
 
-現在のバージョンは `python3 ~/.claude/statusline.py --version` で確認できます。
+現在のバージョンは `~/.claude/statusline --version` で確認できます。
 
 ## 補足
 
 - レートリミットバー (5h / 7d) は Claude.ai サブスクライバーのみ表示されます
 - ステータスラインはアシスタントのメッセージ出力後に更新されます (300ms デバウンス)
 - キャッシュファイル (`~/.claude/statusline-cache.json`) はセッション間で自動的に作成・更新されます
-- Windows では UTF-8 出力エンコーディングが自動設定されます
 
 ---
 
@@ -87,17 +110,25 @@ A custom status line for [Claude Code](https://claude.ai/code) displaying model 
 
 ### Install
 
+macOS / Linux:
+
 ```bash
-curl -Lo ~/.claude/statusline.py https://github.com/ta17eee/claude-code-statusline/releases/latest/download/statusline.py
+curl -fsSL https://github.com/ta17eee/claude-code-statusline/releases/latest/download/install.sh | sh
 ```
 
-Add to `~/.claude/settings.json`:
+Windows (PowerShell):
+
+```powershell
+irm https://github.com/ta17eee/claude-code-statusline/releases/latest/download/install.ps1 | iex
+```
+
+Add the printed path to `~/.claude/settings.json`:
 
 ```json
 {
   "statusLine": {
     "type": "command",
-    "command": "python3 ~/.claude/statusline.py"
+    "command": "/path/to/.claude/statusline"
   }
 }
 ```
@@ -105,9 +136,10 @@ Add to `~/.claude/settings.json`:
 ### Requirements
 
 - **Claude Code**
-- **Python 3.7+** — standard library only, no `pip install` needed
 - **Git** (optional) — for branch/commit display; falls back to plain directory path
 - **Terminal** — 24-bit color and Unicode support required (Ghostty, iTerm2, Alacritty, Kitty, Windows Terminal, cmux, etc.)
+
+No Python or other runtime required (single native binary). Supported platforms: macOS (Apple Silicon / Intel), Linux (x86_64), Windows (x86_64).
 
 ## License
 
