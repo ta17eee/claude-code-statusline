@@ -81,4 +81,5 @@ jobs:
         with:
           files: artifacts/*
           fail_on_unmatched_files: true
+          generate_release_notes: true
           prerelease: ${{ steps.prerelease.outputs.value }}
