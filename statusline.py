@@ -203,15 +203,9 @@ def _pick_fresher(a, b):
 model = data.get('model', {}).get('display_name', 'Claude')
 model = re.sub(r'\s*\([^)]*context\)', '', model)
 
-ctx_size = data.get('context_window', {}).get('context_window_size')
-if ctx_size is not None:
-    if ctx_size >= 1_000_000:
-        size_label = f'{ctx_size // 1_000_000}M'
-    elif ctx_size >= 1_000:
-        size_label = f'{ctx_size // 1_000}K'
-    else:
-        size_label = str(ctx_size)
-    model = f'{model} {size_label}'
+effort = (data.get('effort') or {}).get('level')
+if effort:
+    model = f'{model} {DIM}{effort}{R}'
 
 parts = [model]
 
