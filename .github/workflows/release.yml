@@ -1,0 +1,84 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-14
+            asset: statusline-macos-arm64
+          - target: x86_64-apple-darwin
+            os: macos-14
+            asset: statusline-macos-x86_64
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            asset: statusline-linux-x86_64
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            asset: statusline-windows-x86_64.exe
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install musl tools
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Install Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build
+        working-directory: rust
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Stage binary (unix)
+        if: runner.os != 'Windows'
+        working-directory: rust
+        run: cp target/${{ matrix.target }}/release/statusline ${{ matrix.asset }}
+
+      - name: Stage binary (windows)
+        if: runner.os == 'Windows'
+        working-directory: rust
+        run: copy target\${{ matrix.target }}\release\statusline.exe ${{ matrix.asset }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: rust/${{ matrix.asset }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      # action-gh-release's `prerelease` input has no auto-detect mode (bool only),
+      # so mark it ourselves from the semver pre-release identifier in the tag
+      # (e.g. v2.0.0-rc1 → prerelease, v2.0.0 → not).
+      - name: Determine prerelease
+        id: prerelease
+        run: |
+          if [[ "${{ github.ref_name }}" == *-* ]]; then
+            echo "value=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          fail_on_unmatched_files: true
+          prerelease: ${{ steps.prerelease.outputs.value }}
