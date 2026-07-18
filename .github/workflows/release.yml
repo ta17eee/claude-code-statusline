@@ -60,6 +60,11 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      # install.sh / install.ps1 come from the repo, not build artifacts —
+      # README points at releases/latest/download/install.sh, so they must be
+      # attached to every release.
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -79,7 +84,10 @@ jobs:
 
       - uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/*
+          files: |
+            artifacts/*
+            install.sh
+            install.ps1
           fail_on_unmatched_files: true
           generate_release_notes: true
           prerelease: ${{ steps.prerelease.outputs.value }}
