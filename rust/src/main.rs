@@ -1,5 +1,6 @@
 //! Claude Code status line: two-line display with block/braille progress bars.
-//! Rust port of statusline.py — see ../CLAUDE.md for design rationale.
+//! With `--subagent`, renders agent-panel task rows instead (subagentStatusLine
+//! protocol: tasks in, JSON Lines out). See ../CLAUDE.md for design rationale.
 
 use chrono::{Local, TimeZone};
 use serde_json::Value;
@@ -8,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const R: &str = "\x1b[0m";
 const DIM: &str = "\x1b[2m";
@@ -341,6 +343,290 @@ fn strip_context_suffix(input: &str) -> String {
     result
 }
 
+// ── Subagent status line (--subagent) ────────────────────────────────────────
+//
+// Protocol: one invocation receives every running panel task; stdout is JSON
+// Lines, one {"id", "content"} object per overridden row. `content` replaces
+// the whole row body after the status bullet, so identity/summary/metrics must
+// all be re-emitted here. Tasks we print nothing for keep Claude Code's default
+// rendering — that fail-open path is the error handling strategy throughout.
+//
+// Output is deliberately plain text (no ANSI): the host wraps the row in its
+// own dim/bold styling per focus state, and embedded escape codes would break
+// that. Number/duration formats mirror the host's formatters so overridden and
+// default rows read identically.
+
+const NAME_COL_MIN: usize = 4;
+const NAME_COL_MAX: usize = 28; // host caps its name column at 28 too
+const NAME_SUMMARY_GAP: usize = 2;
+const RIGHT_MIN_GAP: usize = 1;
+const RAW_MODEL_MAX: usize = 20;
+
+fn display_width(s: &str) -> usize {
+    UnicodeWidthStr::width(s)
+}
+
+/// Truncate to `max` display columns, appending `…` when anything was cut.
+fn truncate_display(s: &str, max: usize) -> String {
+    if display_width(s) <= max {
+        return s.to_string();
+    }
+    if max == 0 {
+        return String::new();
+    }
+    let mut out = String::new();
+    let mut w = 0;
+    for c in s.chars() {
+        let cw = UnicodeWidthChar::width(c).unwrap_or(0);
+        if w + cw > max - 1 {
+            break;
+        }
+        out.push(c);
+        w += cw;
+    }
+    out.push('…');
+    out
+}
+
+/// Mirror the host's token formatter: >= 1000 uses compact notation with
+/// exactly one fraction digit, lowercased ("33.8k", "34.0k", "1.5m").
+fn fmt_token_count(n: f64) -> String {
+    let n = n.max(0.0);
+    if n < 1000.0 {
+        return format!("{}", n.round() as i64);
+    }
+    // Unit boundaries sit where one-decimal rounding would print "1000.0".
+    let (val, unit) = if n >= 999_950_000.0 {
+        (n / 1e9, "b")
+    } else if n >= 999_950.0 {
+        (n / 1e6, "m")
+    } else {
+        (n / 1e3, "k")
+    };
+    format!("{val:.1}{unit}")
+}
+
+/// Mirror the host's duration formatter: "54s", "3m 5s", "1h 2m 5s", "1d 2h 3m".
+/// Sub-minute floors the seconds; above that seconds are rounded with carry.
+fn fmt_elapsed_ms(ms: f64) -> String {
+    let ms = ms.max(0.0);
+    if ms < 60_000.0 {
+        return format!("{}s", (ms / 1000.0).floor() as i64);
+    }
+    let mut d = (ms / 86_400_000.0).floor() as i64;
+    let mut h = (ms % 86_400_000.0 / 3_600_000.0).floor() as i64;
+    let mut m = (ms % 3_600_000.0 / 60_000.0).floor() as i64;
+    let mut s = (ms % 60_000.0 / 1000.0).round() as i64;
+    if s == 60 {
+        s = 0;
+        m += 1;
+    }
+    if m == 60 {
+        m = 0;
+        h += 1;
+    }
+    if h == 24 {
+        h = 0;
+        d += 1;
+    }
+    if d > 0 {
+        format!("{d}d {h}h {m}m")
+    } else if h > 0 {
+        format!("{h}h {m}m {s}s")
+    } else {
+        format!("{m}m {s}s")
+    }
+}
+
+/// Short display name from a resolved model id: "claude-opus-4-8" → "Opus 4.8",
+/// "claude-3-5-haiku-20241022" → "Haiku 3.5". Handles Bedrock/Vertex-style ids
+/// by substring search; unknown ids pass through (truncated).
+fn model_display_name(id: &str) -> String {
+    let lower = id.to_ascii_lowercase();
+    let base = lower.split('[').next().unwrap_or(""); // strip "[1m]"-style suffix
+    let tokens: Vec<&str> = base
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|s| !s.is_empty())
+        .collect();
+    const FAMILIES: [&str; 5] = ["fable", "mythos", "opus", "sonnet", "haiku"];
+    let Some(fi) = tokens.iter().position(|t| FAMILIES.contains(t)) else {
+        return truncate_display(id, RAW_MODEL_MAX);
+    };
+    // Version segments are short digit runs; an 8-digit run is a date suffix.
+    let is_ver = |t: &str| t.len() <= 2 && t.bytes().all(|b| b.is_ascii_digit());
+    let mut ver: Vec<&str> = Vec::new();
+    for t in &tokens[fi + 1..] {
+        if !is_ver(t) {
+            break;
+        }
+        ver.push(t);
+    }
+    if ver.is_empty() {
+        // Older ids put the version before the family ("claude-3-5-haiku").
+        for t in tokens[..fi].iter().rev() {
+            if !is_ver(t) {
+                break;
+            }
+            ver.insert(0, t);
+        }
+    }
+    let fam = tokens[fi];
+    let mut name = fam[..1].to_ascii_uppercase();
+    name.push_str(&fam[1..]);
+    if !ver.is_empty() {
+        name.push(' ');
+        name.push_str(&ver.join("."));
+    }
+    name
+}
+
+fn task_str<'a>(task: &'a Value, key: &str) -> &'a str {
+    task.get(key).and_then(|v| v.as_str()).unwrap_or("")
+}
+
+/// Single-line-safe copy of host-provided text.
+fn sanitize(s: &str) -> String {
+    s.replace(['\n', '\r', '\t'], " ")
+}
+
+/// True when tokenSamples (~5s of history) show the count still climbing,
+/// i.e. the agent is receiving tokens right now rather than waiting on a tool.
+fn is_receiving(task: &Value) -> bool {
+    let Some(samples) = task.get("tokenSamples").and_then(|v| v.as_array()) else {
+        return false;
+    };
+    let nums: Vec<f64> = samples.iter().filter_map(|v| v.as_f64()).collect();
+    nums.len() >= 2 && nums[nums.len() - 1] > nums[0]
+}
+
+struct RowInput {
+    id: String,
+    identity: String,
+    summary: String,
+    right: String,
+}
+
+/// Decide eligibility and gather per-row pieces. Returns None to leave the row
+/// on Claude Code's default rendering.
+fn subagent_row_input(task: &Value, now_ms: f64) -> Option<RowInput> {
+    let task_type = task_str(task, "type");
+    // Only running tasks: completed rows freeze their elapsed/token text
+    // host-side, which we can't reproduce (no endTime in the input).
+    if task_str(task, "status") != "running" {
+        return None;
+    }
+    let model = task_str(task, "model");
+    // Without a model we'd add nothing over the default row.
+    if model.is_empty() {
+        return None;
+    }
+    let label = task_str(task, "label");
+    match task_type {
+        "local_agent" => {}
+        "in_process_teammate" => {
+            // These states carry host-side info we can't reproduce (queued
+            // count, approval prompt), and the label text doubles as the
+            // state flag — fall back to the default row for them.
+            if label == "idle" || label == "awaiting approval" {
+                return None;
+            }
+        }
+        _ => return None,
+    }
+
+    let name = task_str(task, "name");
+    let description = task_str(task, "description");
+    let identity = if !name.is_empty() { name } else { description };
+    if identity.is_empty() {
+        return None;
+    }
+    let summary = if !label.is_empty() { label } else { description };
+    let summary = if summary == identity { "" } else { summary };
+
+    let mut right: Vec<String> = vec![model_display_name(model)];
+    if task_type == "local_agent" {
+        // Teammate rows deliberately omit elapsed: the default shows a
+        // per-turn timer (turnStartTime), and startTime-based lifetime would
+        // read as a wrong value in the same position.
+        if let Some(start) = task.get("startTime").and_then(|v| v.as_f64()) {
+            right.push(fmt_elapsed_ms(now_ms - start));
+        }
+    }
+    let tokens = task.get("tokenCount").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    if tokens > 0.0 {
+        let arrow = if is_receiving(task) { "↓ " } else { "" };
+        right.push(format!("{arrow}{} tokens", fmt_token_count(tokens)));
+    }
+
+    Some(RowInput {
+        id: task_str(task, "id").to_string(),
+        identity: sanitize(identity),
+        summary: sanitize(summary),
+        right: right.join(" · "),
+    })
+}
+
+fn build_subagent_rows(tasks: &[Value], columns: usize, now_ms: f64) -> Vec<(String, String)> {
+    let rows: Vec<RowInput> = tasks
+        .iter()
+        .filter_map(|t| subagent_row_input(t, now_ms))
+        .filter(|r| !r.id.is_empty())
+        .collect();
+    if rows.is_empty() {
+        return Vec::new();
+    }
+
+    let name_col = rows
+        .iter()
+        .map(|r| display_width(&r.identity))
+        .max()
+        .unwrap_or(0)
+        .clamp(NAME_COL_MIN, NAME_COL_MAX);
+
+    rows.iter()
+        .map(|r| {
+            let identity = truncate_display(&r.identity, name_col);
+            let right_w = display_width(&r.right);
+            let fixed = name_col + NAME_SUMMARY_GAP + right_w + RIGHT_MIN_GAP;
+            let content = if columns > fixed {
+                // identity column · flexible summary · right-aligned metrics
+                let summary_budget = columns - fixed;
+                let summary = truncate_display(&r.summary, summary_budget);
+                let pad = columns
+                    - name_col
+                    - NAME_SUMMARY_GAP
+                    - display_width(&summary)
+                    - right_w;
+                format!(
+                    "{identity}{}{summary}{}{}",
+                    " ".repeat(name_col - display_width(&identity) + NAME_SUMMARY_GAP),
+                    " ".repeat(pad),
+                    r.right
+                )
+            } else {
+                // Too narrow to right-align: identity + metrics, host truncates.
+                format!("{} {}", identity, r.right)
+            };
+            (r.id.clone(), content)
+        })
+        .collect()
+}
+
+fn subagent_main() {
+    let mut input = String::new();
+    io::stdin().read_to_string(&mut input).expect("failed to read stdin");
+    let data: Value = serde_json::from_str(&input).expect("invalid JSON on stdin");
+    let columns = data.get("columns").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let empty = Vec::new();
+    let tasks = data.get("tasks").and_then(|v| v.as_array()).unwrap_or(&empty);
+    // NOTE: this mode must never touch the rate-limit cache — it runs every
+    // ~300ms while tasks are active and would churn the file pointlessly.
+    let now_ms = now_unix() * 1000.0;
+    for (id, content) in build_subagent_rows(tasks, columns, now_ms) {
+        println!("{}", serde_json::json!({ "id": id, "content": content }));
+    }
+}
+
 fn now_unix() -> f64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs_f64()
 }
@@ -348,6 +634,10 @@ fn now_unix() -> f64 {
 fn main() {
     if std::env::args().any(|a| a == "--version") {
         println!("{}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+    if std::env::args().any(|a| a == "--subagent") {
+        subagent_main();
         return;
     }
 
@@ -464,5 +754,129 @@ fn main() {
     println!("{line1}");
     if !line2.is_empty() {
         println!("{line2}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn token_count_matches_host_formatter() {
+        assert_eq!(fmt_token_count(0.0), "0");
+        assert_eq!(fmt_token_count(842.0), "842");
+        assert_eq!(fmt_token_count(33_800.0), "33.8k");
+        assert_eq!(fmt_token_count(34_000.0), "34.0k");
+        assert_eq!(fmt_token_count(999_949.0), "999.9k");
+        assert_eq!(fmt_token_count(999_950.0), "1.0m");
+        assert_eq!(fmt_token_count(1_500_000.0), "1.5m");
+    }
+
+    #[test]
+    fn elapsed_matches_host_formatter() {
+        assert_eq!(fmt_elapsed_ms(0.0), "0s");
+        assert_eq!(fmt_elapsed_ms(54_000.0), "54s");
+        assert_eq!(fmt_elapsed_ms(59_999.0), "59s");
+        assert_eq!(fmt_elapsed_ms(60_000.0), "1m 0s");
+        assert_eq!(fmt_elapsed_ms(185_000.0), "3m 5s");
+        assert_eq!(fmt_elapsed_ms(119_501.0), "2m 0s"); // seconds round + carry
+        assert_eq!(fmt_elapsed_ms(3_725_000.0), "1h 2m 5s");
+        assert_eq!(fmt_elapsed_ms(90_060_000.0), "1d 1h 1m");
+    }
+
+    #[test]
+    fn model_names() {
+        assert_eq!(model_display_name("claude-fable-5"), "Fable 5");
+        assert_eq!(model_display_name("claude-opus-4-8"), "Opus 4.8");
+        assert_eq!(model_display_name("claude-sonnet-5"), "Sonnet 5");
+        assert_eq!(model_display_name("claude-haiku-4-5-20251001"), "Haiku 4.5");
+        assert_eq!(model_display_name("claude-3-5-haiku-20241022"), "Haiku 3.5");
+        assert_eq!(model_display_name("claude-fable-5[1m]"), "Fable 5");
+        assert_eq!(
+            model_display_name("us.anthropic.claude-sonnet-5-20250929-v1:0"),
+            "Sonnet 5"
+        );
+        assert_eq!(model_display_name("sonnet"), "Sonnet");
+        assert_eq!(model_display_name("some-custom-model"), "some-custom-model");
+    }
+
+    fn agent(id: &str, name: &str, label: &str, tokens: f64, samples: &[f64]) -> Value {
+        serde_json::json!({
+            "id": id,
+            "name": name,
+            "type": "local_agent",
+            "status": "running",
+            "description": "test task",
+            "label": label,
+            "startTime": 0.0,
+            "model": "claude-haiku-4-5-20251001",
+            "tokenCount": tokens,
+            "tokenSamples": samples,
+        })
+    }
+
+    #[test]
+    fn rows_are_right_aligned_to_columns() {
+        let tasks = vec![
+            agent("t1", "a", "reading files", 12_400.0, &[1.0, 2.0]),
+            agent("t2", "longer-name", "writing code", 45_200.0, &[5.0, 5.0]),
+        ];
+        let rows = build_subagent_rows(&tasks, 100, 60_000.0);
+        assert_eq!(rows.len(), 2);
+        for (_, content) in &rows {
+            assert_eq!(display_width(content), 100);
+        }
+        assert!(rows[0].1.ends_with("Haiku 4.5 · 1m 0s · ↓ 12.4k tokens"));
+        // flat samples → no arrow
+        assert!(rows[1].1.ends_with("Haiku 4.5 · 1m 0s · 45.2k tokens"));
+        // shared identity column: both summaries start at the same offset
+        let off = |s: &str, needle: &str| {
+            let b = s.find(needle).unwrap();
+            display_width(&s[..b])
+        };
+        assert_eq!(off(&rows[0].1, "reading"), off(&rows[1].1, "writing"));
+    }
+
+    #[test]
+    fn ineligible_tasks_fall_back_to_default() {
+        let mut bash = agent("t1", "build", "cargo build", 0.0, &[]);
+        bash["type"] = "local_bash".into();
+        let mut done = agent("t2", "done", "finished", 10.0, &[]);
+        done["status"] = "completed".into();
+        let mut modelless = agent("t3", "nomodel", "working", 10.0, &[]);
+        modelless["model"] = "".into();
+        let mut idle = agent("t4", "mate", "idle", 10.0, &[]);
+        idle["type"] = "in_process_teammate".into();
+        let mut approval = agent("t5", "mate2", "awaiting approval", 10.0, &[]);
+        approval["type"] = "in_process_teammate".into();
+        let tasks = vec![bash, done, modelless, idle, approval];
+        assert!(build_subagent_rows(&tasks, 100, 60_000.0).is_empty());
+    }
+
+    #[test]
+    fn teammate_rows_omit_elapsed() {
+        let mut mate = agent("t1", "reviewer", "reviewing main.rs", 45_200.0, &[1.0, 2.0]);
+        mate["type"] = "in_process_teammate".into();
+        let rows = build_subagent_rows(&[mate], 100, 60_000.0);
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].1.ends_with("Haiku 4.5 · ↓ 45.2k tokens"));
+        assert!(!rows[0].1.contains("1m 0s"));
+    }
+
+    #[test]
+    fn narrow_columns_keep_identity_and_metrics() {
+        let tasks = vec![agent("t1", "agent-name", "some long summary", 12_400.0, &[])];
+        let rows = build_subagent_rows(&tasks, 20, 60_000.0);
+        assert_eq!(rows[0].1, "agent-name Haiku 4.5 · 1m 0s · 12.4k tokens");
+    }
+
+    #[test]
+    fn summary_truncates_before_metrics() {
+        let tasks = vec![agent("t1", "abcd", &"x".repeat(80), 12_400.0, &[])];
+        let rows = build_subagent_rows(&tasks, 60, 60_000.0);
+        let content = &rows[0].1;
+        assert_eq!(display_width(content), 60);
+        assert!(content.contains('…'));
+        assert!(content.ends_with("Haiku 4.5 · 1m 0s · 12.4k tokens"));
     }
 }

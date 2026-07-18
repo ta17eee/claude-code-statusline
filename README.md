@@ -43,9 +43,15 @@ irm https://github.com/ta17eee/claude-code-statusline/releases/latest/download/i
   "statusLine": {
     "type": "command",
     "command": "/path/to/.claude/statusline"
+  },
+  "subagentStatusLine": {
+    "type": "command",
+    "command": "/path/to/.claude/statusline --subagent"
   }
 }
 ```
+
+`subagentStatusLine` は任意です。設定すると、エージェントパネル (プロンプト入力欄下のタスク一覧) の行にモデル名が追加されます。
 
 <details>
 <summary>旧 Python 版 (v1.2.1 以前) を使い続ける場合</summary>
@@ -84,6 +90,7 @@ Python や追加ランタイムのインストールは不要です (単一の�
 - **コンパクトなモデル情報** — display name から冗長な表記を除去
 - **effort レベル表示** — reasoning effort (`low`〜`max`) をモデル名の隣に表示。セッション中の `/effort` 変更も反映。非対応モデルでは非表示
 - **Git worktree 対応** — worktree 間の移動でも正しいパスを表示
+- **サブエージェント行のモデル表示** (`--subagent`) — エージェントパネルの実行中タスク行に、デフォルト UI では確認できないモデル名を追加。トークン数・経過時間はデフォルトと同じ書式のまま、`↓` はトークン受信中 (直近約5秒で増加) のときだけ点灯。対象は Task ツールのサブエージェント (エージェントチームの teammate 行には現行の Claude Code がデータを渡さないため、デフォルト表示のまま)
 - **ネイティブバイナリ** — Rust + gitoxide (`gix`) 実装。git 情報の取得にサブプロセスを起動せず、実行1回あたりのコストは1桁ミリ秒台
 
 ## 更新
@@ -129,9 +136,15 @@ Add the printed path to `~/.claude/settings.json`:
   "statusLine": {
     "type": "command",
     "command": "/path/to/.claude/statusline"
+  },
+  "subagentStatusLine": {
+    "type": "command",
+    "command": "/path/to/.claude/statusline --subagent"
   }
 }
 ```
+
+`subagentStatusLine` is optional; it adds the model name to running task rows in the agent panel.
 
 ### Requirements
 

@@ -38,3 +38,4 @@ echo "Installed to $DEST"
 echo ""
 echo "Add this to ~/.claude/settings.json:"
 echo '  "statusLine": { "type": "command", "command": "'"$DEST"'" }'
+echo '  "subagentStatusLine": { "type": "command", "command": "'"$DEST"' --subagent" }'
